@@ -8,14 +8,13 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from custom_components.konke.const import (
+    AUTH_METHOD_TOKEN,
     CONF_ACCESS_TOKEN,
     CONF_AUTH_METHOD,
     CONF_HOME_ID,
     CONF_REFRESH_TOKEN,
     DOMAIN,
-    AUTH_METHOD_TOKEN,
 )
 
 pytest_plugins = "pytest_homeassistant_custom_component"
@@ -54,7 +53,11 @@ class FakeKonkeClient:
         self.refresh_access_token = AsyncMock(return_value={})
         self.login = AsyncMock(return_value={})
 
-    async def fetch_data(self, configured_home_id: str | None = None) -> dict[str, Any]:
+    async def fetch_data(
+        self,
+        configured_home_id: str | None = None,
+        include_forensic_scenes: bool = False,
+    ) -> dict[str, Any]:
         """Return normalized coordinator data."""
         from custom_components.konke.models import build_device_indexes
 
@@ -94,6 +97,43 @@ class FakeKonkeClient:
             "devices": self.devices,
             "normalized_devices": indexes["devices"],
             "normalized_devices_by_id": indexes["devices_by_id"],
+            "forensic_scenes_by_id": {
+                key: value
+                for key, value in {
+                    "10": {
+                        "sceneId": "10",
+                        "sceneName": "回家模式",
+                        "sceneType": "Normal",
+                        "roomName": "客厅",
+                        "homeId": configured_home_id or "home-1",
+                    },
+                    "20": {
+                        "sceneId": "20",
+                        "sceneName": "空调多控",
+                        "sceneType": "MultiControl",
+                        "roomName": "客厅",
+                        "homeId": configured_home_id or "home-1",
+                    },
+                }.items()
+                if include_forensic_scenes or value["sceneType"] != "MultiControl"
+            },
+            "forensic_poll_metadata": {
+                "started_at": "2026-08-11T00:00:00+00:00",
+                "completed_at": "2026-08-11T00:00:01+00:00",
+                "failed_area_ids": [],
+                "area_requests": [],
+            },
+        }
+
+    async def fetch_scene_detail(
+        self, *, home_id: str | int, scene_id: str | int
+    ) -> dict[str, Any]:
+        """Return a stable read-only scene detail."""
+        return {
+            "sceneId": str(scene_id),
+            "homeId": str(home_id),
+            "sceneType": "MultiControl" if str(scene_id) == "20" else "Normal",
+            "actionSimpleV2List": [],
         }
 
     async def execute_scene(self, *, home_id: str | int, scene_id: str | int) -> dict:

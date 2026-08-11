@@ -28,9 +28,9 @@ refresh:
       selector:
         text: {}
 
-raw_command:
-  name: Raw command
-  description: Send a raw Konke device action. This service only works when debug raw command is enabled in integration options.
+clear_forensic_history:
+  name: Clear forensic history
+  description: Permanently clear retained forensic events, baselines, and scene snapshots. Administrator access is required.
   fields:
     entry_id:
       name: Entry ID
@@ -38,27 +38,3 @@ raw_command:
       required: false
       selector:
         text: {}
-    user_device_id:
-      name: User device ID
-      description: Konke userDeviceId to control.
-      required: true
-      selector:
-        text: {}
-    action_name:
-      name: Action name
-      description: Konke action name, for example TurnOff.
-      required: true
-      selector:
-        text: {}
-    extension:
-      name: Extension
-      description: Optional action extension payload.
-      required: false
-      selector:
-        object: {}
-    extra:
-      name: Extra
-      description: Optional extra fields merged into the command body.
-      required: false
-      selector:
-        object: {}

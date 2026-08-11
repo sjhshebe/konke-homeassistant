@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
@@ -15,7 +16,9 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_CREATE_OFFLINE_DEVICE_ENTITIES,
     CONF_CREATE_SCENE_ENTITIES,
-    CONF_DEBUG_RAW_COMMAND,
+    CONF_FORENSIC_LOGGING,
+    CONF_FORENSIC_RETENTION_DAYS,
+    CONF_FORENSIC_WEBSOCKET,
     CONF_SCAN_INTERVAL,
 )
 
@@ -23,8 +26,10 @@ DEFAULT_SCAN_INTERVAL_MINUTES = 10
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=DEFAULT_SCAN_INTERVAL_MINUTES)
 DEFAULT_CREATE_SCENE_ENTITIES = True
 DEFAULT_CREATE_OFFLINE_DEVICE_ENTITIES = True
-DEFAULT_DEBUG_RAW_COMMAND = False
 DEFAULT_ALLOW_PASSWORD_REAUTH = False
+DEFAULT_FORENSIC_LOGGING = True
+DEFAULT_FORENSIC_WEBSOCKET = True
+DEFAULT_FORENSIC_RETENTION_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -34,8 +39,10 @@ class KonkeOptions:
     scan_interval_minutes: int
     create_scene_entities: bool
     create_offline_device_entities: bool
-    debug_raw_command: bool
     allow_password_reauth: bool
+    forensic_logging: bool
+    forensic_websocket: bool
+    forensic_retention_days: int
 
     @property
     def scan_interval(self) -> timedelta:
@@ -78,13 +85,21 @@ def options_from_mapping(options: Mapping[str, Any]) -> KonkeOptions:
             options.get(CONF_CREATE_OFFLINE_DEVICE_ENTITIES),
             DEFAULT_CREATE_OFFLINE_DEVICE_ENTITIES,
         ),
-        debug_raw_command=_bool_option(
-            options.get(CONF_DEBUG_RAW_COMMAND),
-            DEFAULT_DEBUG_RAW_COMMAND,
-        ),
         allow_password_reauth=_bool_option(
             options.get(CONF_ALLOW_PASSWORD_REAUTH),
             DEFAULT_ALLOW_PASSWORD_REAUTH,
+        ),
+        forensic_logging=_bool_option(
+            options.get(CONF_FORENSIC_LOGGING),
+            DEFAULT_FORENSIC_LOGGING,
+        ),
+        forensic_websocket=_bool_option(
+            options.get(CONF_FORENSIC_WEBSOCKET),
+            DEFAULT_FORENSIC_WEBSOCKET,
+        ),
+        forensic_retention_days=_positive_int(
+            options.get(CONF_FORENSIC_RETENTION_DAYS),
+            DEFAULT_FORENSIC_RETENTION_DAYS,
         ),
     )
 

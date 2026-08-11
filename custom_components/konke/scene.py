@@ -28,7 +28,12 @@ async def async_setup_entry(
         return
     coordinator: KonkeDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     scenes = coordinator.data.get("scenes_by_id", {})
-    _remove_internal_scene_entities(hass, entry, coordinator, scenes)
+    _remove_internal_scene_entities(
+        hass,
+        entry,
+        coordinator,
+        coordinator.data.get("forensic_scenes_by_id", scenes),
+    )
     async_add_entities(
         KonkeScene(coordinator, entry, scene_id)
         for scene_id in _scene_ids_for_entities(scenes)
@@ -86,7 +91,9 @@ class KonkeScene(KonkeEntity, Scene):
         """Return scene attributes."""
         scene = self._scene
         return {
-            "scene_id": int(self._scene_id) if self._scene_id.isdigit() else self._scene_id,
+            "scene_id": int(self._scene_id)
+            if self._scene_id.isdigit()
+            else self._scene_id,
             "scene_type": scene.get("sceneType"),
             "manual": scene.get("manual"),
             "home_id": scene.get("homeId"),
@@ -101,9 +108,11 @@ class KonkeScene(KonkeEntity, Scene):
     async def async_activate(self, **kwargs: Any) -> None:
         """Activate the Konke scene."""
         home_id = self._entry.data.get(CONF_HOME_ID)
-        await self.coordinator.client.execute_scene(
+        await self.coordinator.async_execute_scene(
             home_id=home_id,
             scene_id=self._scene_id,
+            context=self._context,
+            source_entity_id=self.entity_id,
         )
         await self.coordinator.async_request_refresh()
 

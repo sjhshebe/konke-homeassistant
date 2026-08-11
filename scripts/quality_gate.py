@@ -69,6 +69,8 @@ def main() -> int:
     failures.extend(check_compileall())
     failures.extend(check_pytest())
     failures.extend(check_platform_boundaries())
+    failures.extend(check_write_audit_boundaries())
+    failures.extend(check_removed_raw_command())
     failures.extend(check_device_type_boundaries())
     failures.extend(check_platform_helpers_boundary())
     failures.extend(check_secret_literals())
@@ -101,8 +103,14 @@ def check_required_files() -> list[str]:
         INTEGRATION / "registry.py",
         INTEGRATION / "command.py",
         INTEGRATION / "api.py",
+        INTEGRATION / "forensics.py",
+        INTEGRATION / "sensor.py",
     )
-    return [f"Missing required file: {path.relative_to(ROOT)}" for path in required if not path.exists()]
+    return [
+        f"Missing required file: {path.relative_to(ROOT)}"
+        for path in required
+        if not path.exists()
+    ]
 
 
 def check_manifest() -> list[str]:
@@ -134,7 +142,7 @@ def check_translations() -> list[str]:
     required_services = {
         "execute_scene",
         "refresh",
-        "raw_command",
+        "clear_forensic_history",
     }
     for path in sorted((INTEGRATION / "translations").glob("*.json")):
         try:
@@ -227,6 +235,68 @@ def check_platform_boundaries() -> list[str]:
     return failures
 
 
+def check_write_audit_boundaries() -> list[str]:
+    """Ensure production writes cannot bypass the forensic coordinator."""
+    allowed = {
+        INTEGRATION / "api.py",
+        INTEGRATION / "coordinator.py",
+    }
+    failures: list[str] = []
+    write_methods = {
+        "control_device",
+        "control_device_exchange",
+        "execute_scene",
+        "execute_scene_exchange",
+        "pause_device",
+        "set_air_conditioner_fan_speed",
+        "set_device_mode",
+        "set_device_temperature",
+        "turn_off_device",
+        "turn_on_device",
+    }
+    for path in python_files():
+        if path in allowed or "tests" in path.relative_to(ROOT).parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in write_methods
+            ):
+                failures.append(
+                    f"{path.relative_to(ROOT)} bypasses forensic write audit: "
+                    f"{node.func.attr}()"
+                )
+    return failures
+
+
+def check_removed_raw_command() -> list[str]:
+    """Ensure the removed arbitrary-write service cannot return to production."""
+    failures: list[str] = []
+    for path in sorted(INTEGRATION.rglob("*")):
+        if not path.is_file() or path.suffix not in {".py", ".json", ".yaml"}:
+            continue
+        text = path.read_text(errors="ignore")
+        if "raw_command" not in text and "debug_raw_command" not in text:
+            continue
+        if path == INTEGRATION / "__init__.py":
+            occurrences = [
+                line.strip()
+                for line in text.splitlines()
+                if "raw_command" in line or "debug_raw_command" in line
+            ]
+            if occurrences == ['options.pop("debug_raw_command", None)']:
+                continue
+        failures.append(
+            f"{path.relative_to(ROOT)} still contains the removed raw-command surface"
+        )
+    return failures
+
+
 def check_device_type_boundaries() -> list[str]:
     """Keep device type string matching centralized."""
     failures: list[str] = []
@@ -305,7 +375,9 @@ def check_secret_literals() -> list[str]:
         text = path.read_text(errors="ignore")
         for pattern in SECRET_VALUE_PATTERNS:
             if pattern.search(text):
-                failures.append(f"{path.relative_to(ROOT)} contains a likely secret literal")
+                failures.append(
+                    f"{path.relative_to(ROOT)} contains a likely secret literal"
+                )
                 break
     return failures
 
@@ -324,9 +396,7 @@ def check_release_package_hygiene() -> list[str]:
 def python_files() -> list[Path]:
     """Return Python files that are part of the project."""
     return sorted(
-        path
-        for path in ROOT.rglob("*.py")
-        if "__pycache__" not in path.parts
+        path for path in ROOT.rglob("*.py") if "__pycache__" not in path.parts
     )
 
 

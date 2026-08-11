@@ -10,7 +10,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_HOME_ID
 from .coordinator import KonkeDataUpdateCoordinator
-from .exceptions import KonkeAuthError
 from .models import KonkeDevice
 from .registry import home_device_info, konke_device_info
 
@@ -100,24 +99,15 @@ class KonkeDeviceEntity(KonkeEntity):
         if not home_id:
             raise HomeAssistantError("Konke home_id not found")
 
-        try:
-            result = await self.coordinator.client.control_device(
-                home_id=home_id,
-                user_device_id=device.user_device_id,
-                action_name=action_name,
-                extension=extension,
-                extra=extra,
-            )
-        except KonkeAuthError:
-            if not await self.coordinator.async_refresh_auth():
-                raise
-            result = await self.coordinator.client.control_device(
-                home_id=home_id,
-                user_device_id=device.user_device_id,
-                action_name=action_name,
-                extension=extension,
-                extra=extra,
-            )
+        result = await self.coordinator.async_control_device(
+            home_id=home_id,
+            user_device_id=device.user_device_id,
+            action_name=action_name,
+            extension=extension,
+            extra=extra,
+            context=self._context,
+            source_entity_id=self.entity_id,
+        )
 
         if refresh:
             await self.coordinator.async_request_refresh()

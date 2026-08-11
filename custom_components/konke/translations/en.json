@@ -31,8 +31,10 @@
       },
       "reauth_confirm": {
         "title": "Reauthenticate Konke Smart",
-        "description": "The current credentials are no longer valid. Enter your Konke Smart account again.",
+        "description": "The current credentials are no longer valid. Enter the credentials used by this Konke Smart entry again.",
         "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token",
           "username": "Phone number",
           "password": "Password",
           "country_code": "Country code",
@@ -47,6 +49,7 @@
     },
     "abort": {
       "already_configured": "This Konke home is already configured.",
+      "wrong_account": "The credentials belong to a different Konke account or home.",
       "reauth_successful": "Konke Smart reauthentication succeeded.",
       "reauth_entry_missing": "The Konke config entry to reauthenticate was not found."
     }
@@ -59,9 +62,18 @@
           "scan_interval": "Refresh interval in minutes",
           "create_scene_entities": "Create scene entities",
           "create_offline_device_entities": "Create offline device entities",
-          "debug_raw_command": "Enable debug raw_command service",
+          "forensic_logging": "Record forensic history",
+          "forensic_websocket": "Listen for real-time forensic events",
+          "forensic_retention_days": "Forensic retention in days",
           "allow_password_reauth": "Allow background password reauthentication"
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "forensic_status": {
+        "name": "Forensic status"
       }
     }
   },
@@ -90,29 +102,13 @@
         }
       }
     },
-    "raw_command": {
-      "name": "Raw command",
-      "description": "Send a raw Konke device action. This only works when debug raw command is enabled in integration options.",
+    "clear_forensic_history": {
+      "name": "Clear forensic history",
+      "description": "Permanently clear retained forensic events, baselines, and scene snapshots. Administrator access is required.",
       "fields": {
         "entry_id": {
           "name": "Entry ID",
           "description": "Optional config entry ID when multiple Konke accounts are configured."
-        },
-        "user_device_id": {
-          "name": "User device ID",
-          "description": "Konke userDeviceId to control."
-        },
-        "action_name": {
-          "name": "Action name",
-          "description": "Konke action name, for example TurnOff."
-        },
-        "extension": {
-          "name": "Extension",
-          "description": "Optional action extension payload."
-        },
-        "extra": {
-          "name": "Extra",
-          "description": "Optional extra fields merged into the command body."
         }
       }
     }

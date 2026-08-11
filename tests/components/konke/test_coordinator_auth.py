@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
 from custom_components.konke.const import (
     AUTH_METHOD_PASSWORD,
     AUTH_METHOD_TOKEN,
-    CONF_ALLOW_PASSWORD_REAUTH,
     CONF_ACCESS_TOKEN,
+    CONF_ALLOW_PASSWORD_REAUTH,
     CONF_AUTH_METHOD,
     CONF_REFRESH_TOKEN,
     DOMAIN,
 )
 from custom_components.konke.coordinator import KonkeDataUpdateCoordinator
 from custom_components.konke.exceptions import KonkeAuthError
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 
 @pytest.mark.asyncio
@@ -97,6 +97,38 @@ async def test_password_reauth_can_be_enabled_explicitly(hass) -> None:
 
     assert await coordinator.async_refresh_auth()
     coordinator.client.login.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_failures_refresh_the_same_token_once(hass) -> None:
+    """Waiters reuse a token already replaced by the first refresh."""
+    coordinator = _coordinator(hass, auth_method=AUTH_METHOD_TOKEN, options={})
+    refresh_started = asyncio.Event()
+    finish_refresh = asyncio.Event()
+
+    async def refresh_access_token() -> dict:
+        refresh_started.set()
+        await finish_refresh.wait()
+        coordinator.client.access_token = "new-access"
+        coordinator.client.refresh_token = "new-refresh"
+        return {}
+
+    coordinator.client.refresh_access_token = AsyncMock(
+        side_effect=refresh_access_token
+    )
+    first = asyncio.create_task(
+        coordinator.async_refresh_auth(failed_access_token="old-access")
+    )
+    await refresh_started.wait()
+    second = asyncio.create_task(
+        coordinator.async_refresh_auth(failed_access_token="old-access")
+    )
+    await asyncio.sleep(0)
+
+    finish_refresh.set()
+
+    assert await asyncio.gather(first, second) == [True, True]
+    coordinator.client.refresh_access_token.assert_awaited_once()
 
 
 def _coordinator(

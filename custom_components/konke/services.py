@@ -2,30 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import voluptuous as vol
-
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
     ATTR_ENTRY_ID,
-    ATTR_ACTION_NAME,
-    ATTR_EXTENSION,
-    ATTR_EXTRA,
     ATTR_SCENE_ID,
-    ATTR_USER_DEVICE_ID,
     CONF_HOME_ID,
     DOMAIN,
+    SERVICE_CLEAR_FORENSIC_HISTORY,
     SERVICE_EXECUTE_SCENE,
-    SERVICE_RAW_COMMAND,
     SERVICE_REFRESH,
 )
 from .coordinator import KonkeDataUpdateCoordinator
-from .exceptions import KonkeAuthError
-from .options import options_from_entry
 
 SERVICE_EXECUTE_SCENE_SCHEMA = vol.Schema(
     {
@@ -37,16 +28,6 @@ SERVICE_EXECUTE_SCENE_SCHEMA = vol.Schema(
 SERVICE_REFRESH_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_ENTRY_ID): cv.string,
-    }
-)
-
-SERVICE_RAW_COMMAND_SCHEMA = vol.Schema(
-    {
-        vol.Optional(ATTR_ENTRY_ID): cv.string,
-        vol.Required(ATTR_USER_DEVICE_ID): vol.Any(cv.positive_int, cv.string),
-        vol.Required(ATTR_ACTION_NAME): cv.string,
-        vol.Optional(ATTR_EXTENSION): vol.Any(dict, cv.string),
-        vol.Optional(ATTR_EXTRA): dict,
     }
 )
 
@@ -80,36 +61,6 @@ def _home_id_from_coordinator(coordinator: KonkeDataUpdateCoordinator) -> str | 
     return home_id
 
 
-async def _async_control_device_with_reauth(
-    coordinator: KonkeDataUpdateCoordinator,
-    *,
-    home_id: str | int,
-    user_device_id: str | int,
-    action_name: str,
-    extension: dict[str, Any] | str | None = None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Send one device command, refreshing auth once if needed."""
-    try:
-        return await coordinator.client.control_device(
-            home_id=home_id,
-            user_device_id=user_device_id,
-            action_name=action_name,
-            extension=extension,
-            extra=extra,
-        )
-    except KonkeAuthError:
-        if not await coordinator.async_refresh_auth():
-            raise
-        return await coordinator.client.control_device(
-            home_id=home_id,
-            user_device_id=user_device_id,
-            action_name=action_name,
-            extension=extension,
-            extra=extra,
-        )
-
-
 async def _async_execute_scene(hass: HomeAssistant, call: ServiceCall) -> None:
     """Execute a Konke scene by ID."""
     entry_id = call.data.get(ATTR_ENTRY_ID)
@@ -117,12 +68,12 @@ async def _async_execute_scene(hass: HomeAssistant, call: ServiceCall) -> None:
     coordinator = _get_coordinator(hass, entry_id)
 
     home_id = _home_id_from_coordinator(coordinator)
-    try:
-        await coordinator.client.execute_scene(home_id=home_id, scene_id=scene_id)
-    except KonkeAuthError:
-        if not await coordinator.async_refresh_auth():
-            raise
-        await coordinator.client.execute_scene(home_id=home_id, scene_id=scene_id)
+    await coordinator.async_execute_scene(
+        home_id=home_id,
+        scene_id=scene_id,
+        context=call.context,
+        source_entity_id=f"{DOMAIN}.{SERVICE_EXECUTE_SCENE}",
+    )
 
 
 async def _async_refresh(hass: HomeAssistant, call: ServiceCall) -> dict:
@@ -135,34 +86,26 @@ async def _async_refresh(hass: HomeAssistant, call: ServiceCall) -> dict:
     }
 
 
-async def _async_raw_command(hass: HomeAssistant, call: ServiceCall) -> dict:
-    """Send a raw Konke action command when debug mode is enabled."""
-    coordinator = _get_coordinator(hass, call.data.get(ATTR_ENTRY_ID))
-    if options_from_entry(coordinator.config_entry).debug_raw_command is not True:
+async def _async_clear_forensic_history(
+    hass: HomeAssistant, call: ServiceCall
+) -> dict[str, object]:
+    """Clear retained forensic history for an administrator."""
+    user_id = call.context.user_id
+    user = await hass.auth.async_get_user(user_id) if user_id else None
+    if user is None or not user.is_admin:
         raise HomeAssistantError(
-            "Konke raw_command is disabled; enable debug_raw_command in integration options"
+            "Only a Home Assistant administrator can clear forensics"
         )
-
-    home_id = _home_id_from_coordinator(coordinator)
-    payload = await _async_control_device_with_reauth(
-        coordinator,
-        home_id=home_id,
-        user_device_id=call.data[ATTR_USER_DEVICE_ID],
-        action_name=call.data[ATTR_ACTION_NAME],
-        extension=call.data.get(ATTR_EXTENSION),
-        extra=call.data.get(ATTR_EXTRA),
-    )
-    await coordinator.async_request_refresh()
+    coordinator = _get_coordinator(hass, call.data.get(ATTR_ENTRY_ID))
     return {
         "entry_id": coordinator.config_entry.entry_id,
-        "user_device_id": str(call.data[ATTR_USER_DEVICE_ID]),
-        "action_name": call.data[ATTR_ACTION_NAME],
-        "response": payload,
+        "deleted": await coordinator.forensics.async_clear(call.context),
     }
 
 
 def async_register_services(hass: HomeAssistant) -> None:
     """Register Konke domain services."""
+
     async def async_execute_scene(call: ServiceCall) -> None:
         """Execute a Konke scene by ID."""
         await _async_execute_scene(hass, call)
@@ -171,9 +114,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         """Refresh Konke data."""
         return await _async_refresh(hass, call)
 
-    async def async_raw_command(call: ServiceCall) -> dict:
-        """Send a raw Konke command."""
-        return await _async_raw_command(hass, call)
+    async def async_clear_forensic_history(call: ServiceCall) -> dict[str, object]:
+        """Clear retained forensic evidence."""
+        return await _async_clear_forensic_history(hass, call)
 
     if not hass.services.has_service(DOMAIN, SERVICE_EXECUTE_SCENE):
         hass.services.async_register(
@@ -188,13 +131,13 @@ def async_register_services(hass: HomeAssistant) -> None:
             SERVICE_REFRESH,
             async_refresh,
             schema=SERVICE_REFRESH_SCHEMA,
-            supports_response=SupportsResponse.ONLY,
+            supports_response=SupportsResponse.OPTIONAL,
         )
-    if not hass.services.has_service(DOMAIN, SERVICE_RAW_COMMAND):
+    if not hass.services.has_service(DOMAIN, SERVICE_CLEAR_FORENSIC_HISTORY):
         hass.services.async_register(
             DOMAIN,
-            SERVICE_RAW_COMMAND,
-            async_raw_command,
-            schema=SERVICE_RAW_COMMAND_SCHEMA,
-            supports_response=SupportsResponse.ONLY,
+            SERVICE_CLEAR_FORENSIC_HISTORY,
+            async_clear_forensic_history,
+            schema=SERVICE_REFRESH_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
         )

@@ -31,8 +31,10 @@
       },
       "reauth_confirm": {
         "title": "重新登录控客智能",
-        "description": "当前凭据已失效，请重新填写控客智能账号。",
+        "description": "当前凭据已失效，请重新填写该配置项原来使用的控客智能凭据。",
         "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token",
           "username": "手机号",
           "password": "密码",
           "country_code": "国家/地区代码",
@@ -47,6 +49,7 @@
     },
     "abort": {
       "already_configured": "该控客家庭已经配置。",
+      "wrong_account": "该凭据属于另一个控客账号或家庭。",
       "reauth_successful": "控客智能已重新登录。",
       "reauth_entry_missing": "找不到需要重新登录的控客配置项。"
     }
@@ -59,9 +62,18 @@
           "scan_interval": "刷新间隔（分钟）",
           "create_scene_entities": "创建场景实体",
           "create_offline_device_entities": "创建离线设备实体",
-          "debug_raw_command": "启用调试 raw_command 服务",
+          "forensic_logging": "记录取证历史",
+          "forensic_websocket": "监听实时取证事件",
+          "forensic_retention_days": "取证记录保留天数",
           "allow_password_reauth": "允许后台用密码重新登录"
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "forensic_status": {
+        "name": "取证状态"
       }
     }
   },
@@ -90,29 +102,13 @@
         }
       }
     },
-    "raw_command": {
-      "name": "原始命令",
-      "description": "发送控客设备原始动作命令。只有在集成选项中启用调试 raw_command 后才可使用。",
+    "clear_forensic_history": {
+      "name": "清除取证历史",
+      "description": "永久清除已保存的取证事件、轮询基线和场景快照，仅管理员可以调用。",
       "fields": {
         "entry_id": {
           "name": "配置项 ID",
           "description": "存在多个控客账号时用于指定配置项。"
-        },
-        "user_device_id": {
-          "name": "用户设备 ID",
-          "description": "要控制的控客 userDeviceId。"
-        },
-        "action_name": {
-          "name": "动作名称",
-          "description": "控客动作名称，例如 TurnOff。"
-        },
-        "extension": {
-          "name": "扩展内容",
-          "description": "可选动作 extension payload。"
-        },
-        "extra": {
-          "name": "额外字段",
-          "description": "可选额外字段，会合并进命令 body。"
         }
       }
     }

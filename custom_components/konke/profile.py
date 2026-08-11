@@ -18,3 +18,4 @@ DEFAULT_VERSION_HEADER = "Android-2.9.5-OnePlus ONEPLUS A5000-7.1.1"
 
 ACCOUNT_BASE_URL = "https://kapp.ikonke.com/account"
 API_BASE_URL = "https://kapp.ikonke.com/api"
+WEBSOCKET_LISTENER_URL = "wss://kapp.ikonke.com/ws/listener"

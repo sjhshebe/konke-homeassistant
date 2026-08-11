@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -13,17 +13,18 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import KonkeApiClient
-from .exceptions import KonkeApiError, KonkeAuthError, KonkeCannotConnect
 from .const import (
     AUTH_METHOD_PASSWORD,
     AUTH_METHOD_TOKEN,
     CONF_ACCESS_TOKEN,
     CONF_ALLOW_PASSWORD_REAUTH,
     CONF_AUTH_METHOD,
+    CONF_COUNTRY_CODE,
     CONF_CREATE_OFFLINE_DEVICE_ENTITIES,
     CONF_CREATE_SCENE_ENTITIES,
-    CONF_COUNTRY_CODE,
-    CONF_DEBUG_RAW_COMMAND,
+    CONF_FORENSIC_LOGGING,
+    CONF_FORENSIC_RETENTION_DAYS,
+    CONF_FORENSIC_WEBSOCKET,
     CONF_HOME_ID,
     CONF_HOME_NAME,
     CONF_REFRESH_TOKEN,
@@ -34,6 +35,7 @@ from .const import (
     CONF_VERSION_HEADER,
     DOMAIN,
 )
+from .exceptions import KonkeApiError, KonkeAuthError, KonkeCannotConnect
 from .options import (
     options_from_mapping,
 )
@@ -95,7 +97,9 @@ async def _validate_password(
     home_index = await client.validate_token()
     home = client.extract_home(home_index)
     user_token = login_payload.get("data", {}).get("userToken", {})
-    user_id = user_token.get("userId") or home_index.get("data", {}).get("user", {}).get("userId")
+    user_id = user_token.get("userId") or home_index.get("data", {}).get(
+        "user", {}
+    ).get("userId")
     token_expires_at = client.expires_at_from_payload(login_payload)
     return {
         CONF_USERNAME: username,
@@ -116,7 +120,9 @@ def _auth_method_schema() -> vol.Schema:
     """Return auth method schema."""
     return vol.Schema(
         {
-            vol.Required(CONF_AUTH_METHOD, default=AUTH_METHOD_TOKEN): selector.SelectSelector(
+            vol.Required(
+                CONF_AUTH_METHOD, default=AUTH_METHOD_TOKEN
+            ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
                         {"value": AUTH_METHOD_TOKEN, "label": "Access Token"},
@@ -129,8 +135,9 @@ def _auth_method_schema() -> vol.Schema:
     )
 
 
-def _token_schema() -> vol.Schema:
+def _token_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     """Return token form schema."""
+    defaults = defaults or {}
     return vol.Schema(
         {
             vol.Required(CONF_ACCESS_TOKEN): selector.TextSelector(
@@ -139,22 +146,38 @@ def _token_schema() -> vol.Schema:
             vol.Optional(CONF_REFRESH_TOKEN): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
             ),
-            vol.Optional(CONF_COUNTRY_CODE, default=DEFAULT_COUNTRY_CODE): str,
-            vol.Optional(CONF_REGION_ID, default=DEFAULT_REGION_ID): str,
+            vol.Optional(
+                CONF_COUNTRY_CODE,
+                default=str(defaults.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE)),
+            ): str,
+            vol.Optional(
+                CONF_REGION_ID,
+                default=str(defaults.get(CONF_REGION_ID, DEFAULT_REGION_ID)),
+            ): str,
         }
     )
 
 
-def _password_schema() -> vol.Schema:
+def _password_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     """Return username/password form schema."""
+    defaults = defaults or {}
     return vol.Schema(
         {
-            vol.Required(CONF_USERNAME): str,
+            vol.Required(
+                CONF_USERNAME,
+                default=str(defaults.get(CONF_USERNAME, "")),
+            ): str,
             vol.Required(CONF_PASSWORD): selector.TextSelector(
                 selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
             ),
-            vol.Optional(CONF_COUNTRY_CODE, default=DEFAULT_COUNTRY_CODE): str,
-            vol.Optional(CONF_REGION_ID, default=DEFAULT_REGION_ID): str,
+            vol.Optional(
+                CONF_COUNTRY_CODE,
+                default=str(defaults.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE)),
+            ): str,
+            vol.Optional(
+                CONF_REGION_ID,
+                default=str(defaults.get(CONF_REGION_ID, DEFAULT_REGION_ID)),
+            ): str,
         }
     )
 
@@ -177,9 +200,17 @@ def _options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schema:
                 default=options.create_offline_device_entities,
             ): bool,
             vol.Optional(
-                CONF_DEBUG_RAW_COMMAND,
-                default=options.debug_raw_command,
+                CONF_FORENSIC_LOGGING,
+                default=options.forensic_logging,
             ): bool,
+            vol.Optional(
+                CONF_FORENSIC_WEBSOCKET,
+                default=options.forensic_websocket,
+            ): bool,
+            vol.Optional(
+                CONF_FORENSIC_RETENTION_DAYS,
+                default=options.forensic_retention_days,
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=90)),
             vol.Optional(
                 CONF_ALLOW_PASSWORD_REAUTH,
                 default=options.allow_password_reauth,
@@ -191,7 +222,7 @@ def _options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schema:
 class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Konke Smart."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self,
@@ -297,16 +328,49 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if self._reauth_entry is None:
             return self.async_abort(reason="reauth_entry_missing")
 
+        auth_method = self._reauth_entry.data.get(
+            CONF_AUTH_METHOD,
+            AUTH_METHOD_PASSWORD
+            if self._reauth_entry.data.get(CONF_USERNAME)
+            else AUTH_METHOD_TOKEN,
+        )
         errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                data = await _validate_password(
-                    self.hass,
-                    user_input[CONF_USERNAME].strip(),
-                    user_input[CONF_PASSWORD],
-                    user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE).strip(),
-                    user_input.get(CONF_REGION_ID, DEFAULT_REGION_ID).strip(),
+            existing_data = self._reauth_entry.data
+            country_code = str(
+                user_input.get(
+                    CONF_COUNTRY_CODE,
+                    existing_data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
                 )
+            ).strip()
+            region_id = str(
+                user_input.get(
+                    CONF_REGION_ID,
+                    existing_data.get(CONF_REGION_ID, DEFAULT_REGION_ID),
+                )
+            ).strip()
+            try:
+                if auth_method == AUTH_METHOD_TOKEN:
+                    data = await _validate_token(
+                        self.hass,
+                        user_input[CONF_ACCESS_TOKEN].strip(),
+                        str(
+                            user_input.get(
+                                CONF_REFRESH_TOKEN,
+                                existing_data.get(CONF_REFRESH_TOKEN, ""),
+                            )
+                        ).strip(),
+                        country_code,
+                        region_id,
+                    )
+                else:
+                    data = await _validate_password(
+                        self.hass,
+                        user_input[CONF_USERNAME].strip(),
+                        user_input[CONF_PASSWORD],
+                        country_code,
+                        region_id,
+                    )
             except KonkeAuthError:
                 errors["base"] = "invalid_auth"
             except KonkeCannotConnect:
@@ -314,17 +378,26 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except KonkeApiError:
                 errors["base"] = "unknown"
             else:
-                data[CONF_AUTH_METHOD] = AUTH_METHOD_PASSWORD
-                self.hass.config_entries.async_update_entry(
-                    self._reauth_entry,
-                    data={**self._reauth_entry.data, **data},
+                data[CONF_AUTH_METHOD] = auth_method
+                data[CONF_VERSION_HEADER] = existing_data.get(
+                    CONF_VERSION_HEADER, DEFAULT_VERSION_HEADER
                 )
-                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
+                await self.async_set_unique_id(
+                    f"{DOMAIN}_{data[CONF_USER_ID]}_{data[CONF_HOME_ID]}"
+                )
+                self._abort_if_unique_id_mismatch(reason="wrong_account")
+                return self.async_update_reload_and_abort(
+                    self._reauth_entry,
+                    data_updates=data,
+                )
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=_password_schema(),
+            data_schema=(
+                _token_schema(self._reauth_entry.data)
+                if auth_method == AUTH_METHOD_TOKEN
+                else _password_schema(self._reauth_entry.data)
+            ),
             errors=errors,
         )
 

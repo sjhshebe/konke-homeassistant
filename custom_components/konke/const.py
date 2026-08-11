@@ -11,6 +11,7 @@ PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
     Platform.COVER,
     Platform.FAN,
+    Platform.SENSOR,
 ]
 
 AUTH_METHOD_TOKEN = "token"
@@ -29,15 +30,13 @@ CONF_VERSION_HEADER = "version_header"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_CREATE_SCENE_ENTITIES = "create_scene_entities"
 CONF_CREATE_OFFLINE_DEVICE_ENTITIES = "create_offline_device_entities"
-CONF_DEBUG_RAW_COMMAND = "debug_raw_command"
 CONF_ALLOW_PASSWORD_REAUTH = "allow_password_reauth"
+CONF_FORENSIC_LOGGING = "forensic_logging"
+CONF_FORENSIC_WEBSOCKET = "forensic_websocket"
+CONF_FORENSIC_RETENTION_DAYS = "forensic_retention_days"
 
 SERVICE_EXECUTE_SCENE = "execute_scene"
 SERVICE_REFRESH = "refresh"
-SERVICE_RAW_COMMAND = "raw_command"
+SERVICE_CLEAR_FORENSIC_HISTORY = "clear_forensic_history"
 ATTR_SCENE_ID = "scene_id"
 ATTR_ENTRY_ID = "entry_id"
-ATTR_USER_DEVICE_ID = "user_device_id"
-ATTR_ACTION_NAME = "action_name"
-ATTR_EXTENSION = "extension"
-ATTR_EXTRA = "extra"

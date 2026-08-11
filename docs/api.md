@@ -18,9 +18,9 @@ Do not paste raw captures, tokens, phone numbers, passwords, or home addresses h
   - query: `synUserHostList`
   - response `data` contains `hostDevice`, `otherHosts`, `homeList`, and `home`.
 - Room scenes: `GET /api/v2/scene`
-  - sync query `sceneTypes` is limited to `Normal,ExternalScene`.
-  - `MultiControl` scenes are internal app groupings and are intentionally not
-    requested or exposed as Home Assistant scene entities.
+  - normal entity sync uses `Normal,ExternalScene`.
+  - forensic recording may additionally request `MultiControl`; it is retained
+    only as a read-only topology snapshot and is never exposed as an HA scene.
 - Scene detail: `GET /api/scene/{scene_id}`
 - Scene execution: `POST /api/scene/action`
 - Visible devices: `GET /api/user/device`
@@ -28,11 +28,13 @@ Do not paste raw captures, tokens, phone numbers, passwords, or home addresses h
   - room device list query keys observed: `roomId`, `isVisible`, `orderByField`, `orderByType`, `page`, `pageSize`.
   - device detail query keys observed: `userDeviceId`.
   - response `data.pagePojo` is used for paged lists.
+  - forensic polling follows every reported page instead of stopping after the first 100 devices.
   - response `data.userDeviceList` is used for a single `userDeviceId` detail query.
 - Device cache: `GET /api/user/device/cache`
   - area cache query keys observed: `areaId`, optional `cateTypes`.
   - detail cache query keys observed: `userDeviceId`.
   - response `data.cacheList` contains cached state.
+  - cache-only device IDs are retained in the forensic baseline but do not create HA entities.
 - Device action endpoint: `POST /api/device/action/control`
 - Air-conditioner actions for `virtual_AC_3in1` indoor units:
   - endpoint: `POST /api/device/action/control`
@@ -63,6 +65,10 @@ Do not paste raw captures, tokens, phone numbers, passwords, or home addresses h
   - `current` contains `mode`, `setTemp`, `online`, `curTemp`, `updateTime`, `nodeId`, `speed`, `epType`, `on`, `onlineState`.
 - WebSocket listener: `GET /ws/listener`
   - query contains `authorization`; keep it redacted.
+  - the integration uses it only for forensic observation. Messages never
+    update entities, trigger refreshes, execute scenes, or control devices.
+  - `DeviceReport` and unknown JSON objects are recursively sanitized before
+    bounded persistence. Non-JSON data is retained only as length and SHA-256.
 - Curtain motor actions:
   - state cache endpoint: `GET /api/user/device/cache?areaId=<area_id>`
   - endpoint: `POST /api/device/action/control`
