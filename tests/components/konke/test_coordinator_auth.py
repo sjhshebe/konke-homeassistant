@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +14,7 @@ from custom_components.konke.const import (
     CONF_ALLOW_PASSWORD_REAUTH,
     CONF_AUTH_METHOD,
     CONF_REFRESH_TOKEN,
+    CONF_TOKEN_EXPIRES_AT,
     DOMAIN,
 )
 from custom_components.konke.coordinator import KonkeDataUpdateCoordinator
@@ -129,6 +131,63 @@ async def test_concurrent_failures_refresh_the_same_token_once(hass) -> None:
 
     assert await asyncio.gather(first, second) == [True, True]
     coordinator.client.refresh_access_token.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_proactive_renewal_does_not_use_stored_password(hass) -> None:
+    """Proactive renewals must not start a second cloud session."""
+    coordinator = _coordinator(hass, auth_method=AUTH_METHOD_PASSWORD, options={})
+    coordinator.client.refresh_access_token = AsyncMock(
+        side_effect=KonkeAuthError("bad token")
+    )
+    coordinator.client.login = AsyncMock()
+
+    assert not await coordinator.async_refresh_auth(allow_password_reauth=False)
+    coordinator.client.login.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_proactive_refresh_attempts_are_throttled(hass) -> None:
+    """Refresh-token attempts are not repeated on every poll."""
+    coordinator = _coordinator(hass, auth_method=AUTH_METHOD_PASSWORD, options={})
+    expires_at = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    hass.config_entries.async_update_entry(
+        coordinator.config_entry,
+        data={**coordinator.config_entry.data, CONF_TOKEN_EXPIRES_AT: expires_at},
+    )
+
+    assert coordinator._should_try_proactive_refresh() is True
+    assert coordinator._should_try_proactive_refresh() is False
+
+
+@pytest.mark.asyncio
+async def test_expiring_token_poll_skips_password_login(hass) -> None:
+    """A token that merely expires soon is renewed without a password login."""
+    coordinator = _coordinator(hass, auth_method=AUTH_METHOD_PASSWORD, options={})
+    expires_at = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    hass.config_entries.async_update_entry(
+        coordinator.config_entry,
+        data={**coordinator.config_entry.data, CONF_TOKEN_EXPIRES_AT: expires_at},
+    )
+    coordinator.async_refresh_auth = AsyncMock(return_value=False)
+    coordinator.client.fetch_data = AsyncMock(
+        return_value={
+            "home": {},
+            "devices": [],
+            "rooms": [],
+            "scenes": [],
+            "normalized_devices_by_id": {},
+            "scenes_by_id": {},
+        }
+    )
+    coordinator._async_record_successful_poll = AsyncMock()
+
+    await coordinator._async_update_data()
+
+    coordinator.async_refresh_auth.assert_awaited_once_with(
+        failed_access_token="old-access",
+        allow_password_reauth=False,
+    )
 
 
 def _coordinator(

@@ -32,7 +32,7 @@ from .profile import (
     DEFAULT_REGION_ID,
     DEFAULT_VERSION_HEADER,
 )
-from .registry import async_register_konke_devices
+from .registry import async_prune_konke_registry, async_register_konke_devices
 from .services import async_register_services
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -65,6 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
         async_register_konke_devices(hass, entry, coordinator)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        async_prune_konke_registry(hass, entry, coordinator.data or {})
         entry.async_on_unload(entry.add_update_listener(_async_update_listener))
         coordinator.async_start_listener()
         setup_complete = True

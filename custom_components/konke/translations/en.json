@@ -40,6 +40,25 @@
           "country_code": "Country code",
           "region_id": "Region ID"
         }
+      },
+      "reconfigure": {
+        "title": "Change Konke Smart account",
+        "description": "Move this integration to another Konke account or home, for example a family member account that shares the same devices. Konke only allows one active app session per account, so a separate shared account is the recommended way to keep the phone app and Home Assistant online at the same time. Choose the authentication method first, then enter the new credentials.",
+        "data": {
+          "auth_method": "Authentication method"
+        }
+      },
+      "reconfigure_confirm": {
+        "title": "Enter the new Konke account",
+        "description": "Enter the credentials of the new account. When the account or home changes, entities are re-created for the new account; changing only the password of the same account keeps the existing entities.",
+        "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token",
+          "username": "Phone number",
+          "password": "Password",
+          "country_code": "Country code",
+          "region_id": "Region ID"
+        }
       }
     },
     "error": {
@@ -51,6 +70,7 @@
       "already_configured": "This Konke home is already configured.",
       "wrong_account": "The credentials belong to a different Konke account or home.",
       "reauth_successful": "Konke Smart reauthentication succeeded.",
+      "reconfigure_successful": "Konke Smart account change succeeded.",
       "reauth_entry_missing": "The Konke config entry to reauthenticate was not found."
     }
   },

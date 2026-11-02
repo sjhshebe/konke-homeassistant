@@ -19,7 +19,7 @@ Core。
 安装指定版本时设置 `KONKE_VERSION`：
 
 ```bash
-curl --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 -fsSL --http1.1 https://raw.githubusercontent.com/sjhshebe/konke-homeassistant/main/install.sh -o /tmp/konke-install.sh && KONKE_VERSION=v0.8.0 sh /tmp/konke-install.sh
+curl --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 -fsSL --http1.1 https://raw.githubusercontent.com/sjhshebe/konke-homeassistant/main/install.sh -o /tmp/konke-install.sh && KONKE_VERSION=v0.8.1 sh /tmp/konke-install.sh
 ```
 
 如果你的环境没有 `curl`，也可以使用：
@@ -49,7 +49,7 @@ curl --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 -fsSL --ht
 更新到指定版本时设置 `KONKE_VERSION`：
 
 ```bash
-curl --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 -fsSL --http1.1 https://raw.githubusercontent.com/sjhshebe/konke-homeassistant/main/update.sh -o /tmp/konke-update.sh && KONKE_VERSION=v0.8.0 sh /tmp/konke-update.sh
+curl --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 -fsSL --http1.1 https://raw.githubusercontent.com/sjhshebe/konke-homeassistant/main/update.sh -o /tmp/konke-update.sh && KONKE_VERSION=v0.8.1 sh /tmp/konke-update.sh
 ```
 
 如果你的环境没有 `curl`，也可以使用：
@@ -178,6 +178,24 @@ HA 集成页面原有的“下载诊断”仍是按需生成当前快照，不�
 
 使用手机号和密码登录时，后台密码重新登录默认开启。这样控客 access token 或 refresh token 失效后，HA 可以自动重新登录并恢复实体，不需要手工重新认证。如果你正在用手机 App 或模拟器抓包，担心 HA 自动登录把 App 挤下线，可以在集成选项里关闭这一项。
 
+## 更换账号 / 家庭共享
+
+控客云对同一个账号只允许一个在线会话：新登录会让旧会话失效。因此同一个手机号不能同时登录控客 App 和 Home Assistant，谁后登录谁会把对方挤下线。
+
+推荐的长期方案是给 Home Assistant 单独准备一个**家庭成员账号**（控客 App 里邀请家庭成员并共享设备）：
+
+1. 在控客 App 里注册/邀请一个家庭成员账号，并确认该账号能看到家里的设备。
+2. Home Assistant 中进入 `设置 -> 设备与服务 -> 控客智能`，点击集成卡片上的 **重新配置**。
+3. 第一步选择登录方式（默认沿用当前方式；也可以从密码切换为 Token，反之亦然）。
+4. 填写家庭成员账号的手机号和密码（或 Token），提交。
+5. 集成会自动更新账号、清理旧账号的实体/设备注册表，并按新账号重新生成实体。
+
+重新配置不会删除集成配置项，因此历史取证数据和选项设置都会保留；如果账号或家庭发生变化，实体会重新生成（实体 ID 通常按设备名保持一致）。如果只是修改同账号的密码，重新配置也会保留已有的实体和自定义设置。
+
+如果控客 App 里删除了某些设备或场景，集成会在下一次完整的云端轮询后自动把对应的设备/实体从 HA 注册表清理掉（存在分区请求失败时不会执行清理，避免误删）。
+
+如果你不需要 App 和 HA 同时在线，也可以保持单账号，并在集成选项中关闭“允许后台用密码重新登录”，这样 HA 不会和 App 互相抢登录态。
+
 ## 服务
 
 也可以直接调用服务：
@@ -208,7 +226,8 @@ data:
 
 - 这是云端接口集成，不是局域网本地协议。
 - 控客 token 和密码会保存在 HA 配置存储中，请确保 HA 主机可信。
-- 手机号和密码登录模式会默认允许后台自动重新登录；抓包调试时如需避免和控客手机 App/模拟器抢登录态，可以在集成选项中关闭。
+- 控客云同一账号只允许一个在线会话：HA 和控客 App 同时登录会互相挤下线。推荐给 HA 单独使用家庭成员账号（通过 `重新配置` 切换），或关闭后台密码重新登录。
+- 手机号和密码登录模式会默认允许后台自动重新登录；抓包调试时如需避免和控客手机 App/模拟器抢登录态，可以在集成选项中关闭。0.8.1 起，仅因“token 即将过期”触发的主动续期不会再使用密码重新登录，避免无意义的会话抢占。
 - 已抓包确认的能力优先暴露为标准 HA 实体。日常自动化建议直接调用 `climate`、`cover`、`scene` 等标准服务。
 - GitHub 仓库只包含源码和脱敏测试数据，不包含你的真实 HA 运行时设备清单。HA 的“下载诊断”会从本机实例生成数据，可能包含房间名、设备名、设备 ID 等家庭结构信息；只有你手动导出并发送给别人时才会泄露这些信息。
 - 取证结论采用保守措辞。未发现 HA 下行写请求不等于已经证明是控客 App、米家、云端自动化或硬件故障；最终来源仍可能需要控客官方后台日志。

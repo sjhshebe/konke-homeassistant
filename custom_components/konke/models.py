@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from .capabilities import (
     KonkeCapability,
@@ -82,7 +83,7 @@ class KonkeHome:
     raw: Mapping[str, Any]
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> "KonkeHome":
+    def from_raw(cls, raw: Mapping[str, Any]) -> KonkeHome:
         """Build a normalized home from raw API data."""
         home_id = maybe_str(raw.get("homeId"))
         if home_id is None:
@@ -124,7 +125,7 @@ class KonkeRoom:
     raw: Mapping[str, Any]
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> "KonkeRoom":
+    def from_raw(cls, raw: Mapping[str, Any]) -> KonkeRoom:
         """Build a normalized room from raw API data."""
         room_id = maybe_str(raw.get("roomId"))
         if room_id is None:
@@ -165,7 +166,7 @@ class KonkeDevice:
     raw: Mapping[str, Any]
 
     @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> "KonkeDevice":
+    def from_raw(cls, raw: Mapping[str, Any]) -> KonkeDevice:
         """Build a normalized device from raw API data."""
         user_device_id = maybe_str(raw.get("userDeviceId"))
         if user_device_id is None:

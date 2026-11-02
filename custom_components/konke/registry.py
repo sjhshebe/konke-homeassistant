@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_HOME_ID, DOMAIN
 from .coordinator import KonkeDataUpdateCoordinator
@@ -45,9 +47,14 @@ def home_device_info(
 def konke_device_info(
     device: KonkeDevice,
     *,
-    devices_by_id: Mapping[str, KonkeDevice] | None = None,
+    via_device_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return HA device info for a normalized Konke device."""
+    """Return HA device info for a normalized Konke device.
+
+    The parent relationship is resolved by the caller into a device registry
+    id (``via_device_id``) because HA 2027.8 removes the deprecated
+    identifier based ``via_device`` argument.
+    """
     info: dict[str, Any] = {
         "identifiers": {device_identifier(device.user_device_id)},
         "manufacturer": MANUFACTURER,
@@ -64,14 +71,8 @@ def konke_device_info(
     if sw_version:
         info["sw_version"] = sw_version
 
-    if devices_by_id:
-        parent_id = device.parent_key
-        if (
-            parent_id
-            and parent_id != device.user_device_id
-            and parent_id in devices_by_id
-        ):
-            info["via_device"] = device_identifier(parent_id)
+    if via_device_id:
+        info["via_device_id"] = via_device_id
 
     return info
 
@@ -130,8 +131,116 @@ def async_register_konke_devices(
             continue
         registry.async_get_or_create(
             config_entry_id=entry.entry_id,
-            **konke_device_info(device, devices_by_id=devices_by_id),
+            **konke_device_info(
+                device,
+                via_device_id=parent_device_registry_id(registry, device, devices_by_id),
+            ),
         )
+
+
+def parent_device_registry_id(
+    registry: dr.DeviceRegistry,
+    device: KonkeDevice,
+    devices_by_id: Mapping[str, KonkeDevice],
+) -> str | None:
+    """Return the HA device registry id of the parent device, when known."""
+    parent_id = device.parent_key
+    if (
+        not parent_id
+        or parent_id == device.user_device_id
+        or parent_id not in devices_by_id
+    ):
+        return None
+    parent_entry = registry.async_get_device(
+        identifiers={device_identifier(parent_id)}
+    )
+    return parent_entry.id if parent_entry is not None else None
+
+
+def async_prune_konke_registry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    data: Mapping[str, Any],
+) -> tuple[int, int]:
+    """Remove registry entries for devices/scenes no longer reported by cloud.
+
+    Returns the number of removed scene entities and devices. Callers must only
+    pass a complete device listing: pruning is skipped when the poll reported
+    failed areas or did not contain any device, so a partial cloud response can
+    never wipe the registry.
+    """
+    metadata = data.get("forensic_poll_metadata") or {}
+    if metadata.get("failed_area_ids"):
+        return (0, 0)
+
+    devices_by_id = data.get("normalized_devices_by_id") or {}
+    if not devices_by_id:
+        return (0, 0)
+
+    home = data.get("home") or {}
+    home_id = home.get("homeId") or entry.data.get(CONF_HOME_ID)
+    cloud_home_id = "" if home_id is None else str(home_id)
+    configured_home_id = str(entry.data.get(CONF_HOME_ID) or "")
+    home_ids = {value for value in (cloud_home_id, configured_home_id) if value}
+    expected_device_ids = {str(device_id) for device_id in devices_by_id}
+
+    device_registry = dr.async_get(hass)
+    removed_devices = 0
+    for device_entry in dr.async_entries_for_config_entry(
+        device_registry, entry.entry_id
+    ):
+        konke_ids = {
+            identifier[1]
+            for identifier in device_entry.identifiers
+            if identifier and identifier[0] == DOMAIN
+        }
+        if not konke_ids:
+            continue
+        if konke_ids & home_ids or konke_ids & expected_device_ids:
+            continue
+        device_registry.async_remove_device(device_entry.id)
+        removed_devices += 1
+
+    scenes_by_id = data.get("scenes_by_id") or {}
+    expected_scene_unique_ids = {
+        f"{DOMAIN}_{home_id}_scene_{scene_id}"
+        for home_id in home_ids
+        for scene_id in scenes_by_id
+    }
+    entity_registry = er.async_get(hass)
+    removed_entities = 0
+    for entity_entry in er.async_entries_for_config_entry(
+        entity_registry, entry.entry_id
+    ):
+        if entity_entry.domain != "scene":
+            continue
+        if entity_entry.unique_id in expected_scene_unique_ids:
+            continue
+        entity_registry.async_remove(entity_entry.entity_id)
+        removed_entities += 1
+
+    return (removed_entities, removed_devices)
+
+
+def reset_konke_registry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove entities and devices that were created for this config entry.
+
+    Used when a config entry is repointed at another Konke account (family
+    shared account, or a repaired login). Clearing the registry entries first
+    avoids duplicate entities/devices with stale ``unique_id`` values after
+    the account switch.
+    """
+    entity_registry = er.async_get(hass)
+    for entity_entry in er.async_entries_for_config_entry(
+        entity_registry, entry.entry_id
+    ):
+        entity_registry.async_remove(entity_entry.entity_id)
+
+    device_registry = dr.async_get(hass)
+    for device_entry in dr.async_entries_for_config_entry(
+        device_registry, entry.entry_id
+    ):
+        device_registry.async_remove_device(device_entry.id)
 
 
 def _numeric_sort_key(value: str) -> tuple[int, str]:

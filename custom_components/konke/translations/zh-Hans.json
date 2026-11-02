@@ -40,6 +40,25 @@
           "country_code": "国家/地区代码",
           "region_id": "区域 ID"
         }
+      },
+      "reconfigure": {
+        "title": "更换控客智能账号",
+        "description": "把这个集成改到另一个控客账号或家庭，例如共享了同一批设备的家庭成员账号。控客云对同一账号只允许一个在线会话，所以给 Home Assistant 单独使用共享账号，是让手机 App 和 HA 同时在线的推荐做法。先选择登录方式，下一步再填写新的账号凭据。",
+        "data": {
+          "auth_method": "登录方式"
+        }
+      },
+      "reconfigure_confirm": {
+        "title": "填写新的控客账号",
+        "description": "填写新账号的凭据。如果账号或家庭发生变化，实体会按新账号的设备重新生成；仅修改同一账号的密码时会保留现有实体。",
+        "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token",
+          "username": "手机号",
+          "password": "密码",
+          "country_code": "国家/地区代码",
+          "region_id": "区域 ID"
+        }
       }
     },
     "error": {
@@ -51,6 +70,7 @@
       "already_configured": "该控客家庭已经配置。",
       "wrong_account": "该凭据属于另一个控客账号或家庭。",
       "reauth_successful": "控客智能已重新登录。",
+      "reconfigure_successful": "控客智能账号已更换。",
       "reauth_entry_missing": "找不到需要重新登录的控客配置项。"
     }
   },

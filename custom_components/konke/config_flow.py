@@ -44,6 +44,7 @@ from .profile import (
     DEFAULT_REGION_ID,
     DEFAULT_VERSION_HEADER,
 )
+from .registry import reset_konke_registry
 
 
 async def _validate_token(
@@ -116,12 +117,26 @@ async def _validate_password(
     }
 
 
-def _auth_method_schema() -> vol.Schema:
+def _entry_auth_method(entry: config_entries.ConfigEntry) -> str:
+    """Return the authentication method stored on a config entry."""
+    auth_method = entry.data.get(CONF_AUTH_METHOD)
+    if auth_method in (AUTH_METHOD_PASSWORD, AUTH_METHOD_TOKEN):
+        return auth_method
+    return (
+        AUTH_METHOD_PASSWORD
+        if entry.data.get(CONF_USERNAME)
+        else AUTH_METHOD_TOKEN
+    )
+
+
+def _auth_method_schema(
+    default: str = AUTH_METHOD_TOKEN,
+) -> vol.Schema:
     """Return auth method schema."""
     return vol.Schema(
         {
             vol.Required(
-                CONF_AUTH_METHOD, default=AUTH_METHOD_TOKEN
+                CONF_AUTH_METHOD, default=default
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
@@ -223,6 +238,8 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Konke Smart."""
 
     VERSION = 2
+
+    _reconfigure_auth_method: str = AUTH_METHOD_TOKEN
 
     async def async_step_user(
         self,
@@ -397,6 +414,124 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _token_schema(self._reauth_entry.data)
                 if auth_method == AUTH_METHOD_TOKEN
                 else _password_schema(self._reauth_entry.data)
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Point this config entry at another Konke account.
+
+        Reauthentication only accepts credentials of the account the entry
+        already belongs to, because it is triggered by an expired login.
+        Reconfiguration is the explicit user action used to move the entry to
+        another account, for example a family member account that shares the
+        same home. Konke allows only one active cloud session per account, so
+        a separate shared account is the supported way to keep the phone app
+        and Home Assistant online at the same time.
+
+        The first step selects the authentication method, so an entry can be
+        moved between password and token authentication as well. When the
+        account or home changes, registry entries created for the previous
+        account are removed before the entry reloads, so entities are
+        recreated from the new account's device data instead of leaving
+        duplicates behind.
+        """
+        if user_input is not None:
+            auth_method = user_input[CONF_AUTH_METHOD]
+            if auth_method not in (AUTH_METHOD_PASSWORD, AUTH_METHOD_TOKEN):
+                auth_method = _entry_auth_method(self._get_reconfigure_entry())
+            self._reconfigure_auth_method = auth_method
+            return await self.async_step_reconfigure_confirm()
+
+        entry = self._get_reconfigure_entry()
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_auth_method_schema(_entry_auth_method(entry)),
+        )
+
+    async def async_step_reconfigure_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> config_entries.ConfigFlowResult:
+        """Validate the new account credentials during reconfiguration."""
+        entry = self._get_reconfigure_entry()
+        auth_method = self._reconfigure_auth_method
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            country_code = str(
+                user_input.get(
+                    CONF_COUNTRY_CODE,
+                    entry.data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                )
+            ).strip()
+            region_id = str(
+                user_input.get(
+                    CONF_REGION_ID,
+                    entry.data.get(CONF_REGION_ID, DEFAULT_REGION_ID),
+                )
+            ).strip()
+            try:
+                if auth_method == AUTH_METHOD_TOKEN:
+                    data = await _validate_token(
+                        self.hass,
+                        user_input[CONF_ACCESS_TOKEN].strip(),
+                        str(user_input.get(CONF_REFRESH_TOKEN, "")).strip(),
+                        country_code,
+                        region_id,
+                    )
+                else:
+                    data = await _validate_password(
+                        self.hass,
+                        user_input[CONF_USERNAME].strip(),
+                        user_input[CONF_PASSWORD],
+                        country_code,
+                        region_id,
+                    )
+            except KonkeAuthError:
+                errors["base"] = "invalid_auth"
+            except KonkeCannotConnect:
+                errors["base"] = "cannot_connect"
+            except KonkeApiError:
+                errors["base"] = "unknown"
+            else:
+                data[CONF_AUTH_METHOD] = auth_method
+                data[CONF_VERSION_HEADER] = entry.data.get(
+                    CONF_VERSION_HEADER, DEFAULT_VERSION_HEADER
+                )
+                new_unique_id = f"{DOMAIN}_{data[CONF_USER_ID]}_{data[CONF_HOME_ID]}"
+                existing = (
+                    self.hass.config_entries.async_entry_for_domain_unique_id(
+                        DOMAIN, new_unique_id
+                    )
+                )
+                if existing is not None and existing.entry_id != entry.entry_id:
+                    return self.async_abort(reason="already_configured")
+
+                identity_changed = (
+                    str(entry.data.get(CONF_USER_ID)) != data[CONF_USER_ID]
+                    or str(entry.data.get(CONF_HOME_ID)) != data[CONF_HOME_ID]
+                )
+                if identity_changed:
+                    reset_konke_registry(self.hass, entry)
+
+                self.hass.config_entries.async_update_entry(
+                    entry,
+                    unique_id=new_unique_id,
+                    title=data.get(CONF_HOME_NAME) or entry.title,
+                    data={**entry.data, **data},
+                )
+                await self.hass.config_entries.async_reload(entry.entry_id)
+                return self.async_abort(reason="reconfigure_successful")
+
+        return self.async_show_form(
+            step_id="reconfigure_confirm",
+            data_schema=(
+                _token_schema(entry.data)
+                if auth_method == AUTH_METHOD_TOKEN
+                else _password_schema(entry.data)
             ),
             errors=errors,
         )

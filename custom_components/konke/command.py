@@ -6,7 +6,6 @@ from typing import Any
 
 from .exceptions import KonkeCommandError
 
-
 ACTION_PAUSE = "Pause"
 ACTION_SET_MODE = "SetMode"
 ACTION_SET_TEMPERATURE = "SetTemperature"

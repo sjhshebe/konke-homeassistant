@@ -49,6 +49,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _LISTENER_BACKOFF_SECONDS = (1, 2, 5, 10, 30, 60, 300)
 _SCENE_DETAIL_REFRESH = timedelta(days=1)
+_PROACTIVE_REFRESH_INTERVAL = timedelta(hours=1)
+_REGISTRY_PRUNE_INTERVAL = timedelta(hours=24)
 _DEVICE_REPORT_PAYLOAD_BYTES = 48 * 1024
 _UNKNOWN_WEBSOCKET_SAMPLE_BYTES = 4 * 1024
 _WEBSOCKET_AUTH_CLOSE_CODES = {4001, 4003, 4401, 4403}
@@ -96,6 +98,8 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._scene_details: dict[str, Any] = {}
         self._scene_details_attempted_at: datetime | None = None
         self._scene_details_refreshed_at: datetime | None = None
+        self._proactive_refresh_attempted_at: datetime | None = None
+        self._last_registry_prune_at: datetime | None = None
 
     async def async_initialize(self) -> None:
         """Load persisted evidence before the first cloud refresh."""
@@ -277,10 +281,43 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             expires = expires.replace(tzinfo=UTC)
         return datetime.now(UTC) + timedelta(days=7) >= expires.astimezone(UTC)
 
+    def _should_try_proactive_refresh(self) -> bool:
+        """Return true when attempting a refresh-token renewal is worthwhile.
+
+        Konke does not document a working refresh route, so attempts are
+        throttled: once per hour and only while the stored token actually
+        expires soon. Reactive renewals triggered by rejected requests are
+        handled separately.
+        """
+        if not self.config_entry.data.get(CONF_REFRESH_TOKEN):
+            return False
+        if not self._token_expires_soon():
+            return False
+        now = datetime.now(UTC)
+        if (
+            self._proactive_refresh_attempted_at is not None
+            and now - self._proactive_refresh_attempted_at
+            < _PROACTIVE_REFRESH_INTERVAL
+        ):
+            return False
+        self._proactive_refresh_attempted_at = now
+        return True
+
     async def async_refresh_auth(
-        self, *, failed_access_token: str | None = None
+        self,
+        *,
+        failed_access_token: str | None = None,
+        allow_password_reauth: bool = True,
     ) -> bool:
-        """Refresh authorization using refresh token or stored credentials."""
+        """Refresh authorization using refresh token or stored credentials.
+
+        ``allow_password_reauth=False`` is used for proactive renewals. Konke
+        does not expose a working refresh route, so a proactive renewal would
+        always fall back to a full password login, which starts a new cloud
+        session and logs the phone app out. Reactive renewals (triggered by a
+        rejected request) keep the default because there is no alternative at
+        that point.
+        """
         async with self._auth_lock:
             if (
                 failed_access_token is not None
@@ -288,9 +325,13 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 and self.client.access_token != failed_access_token
             ):
                 return True
-            return await self._async_refresh_auth_locked()
+            return await self._async_refresh_auth_locked(
+                allow_password_reauth=allow_password_reauth
+            )
 
-    async def _async_refresh_auth_locked(self) -> bool:
+    async def _async_refresh_auth_locked(
+        self, *, allow_password_reauth: bool = True
+    ) -> bool:
         """Refresh authorization while serializing concurrent callers."""
         try:
             if self.config_entry.data.get(CONF_REFRESH_TOKEN):
@@ -303,6 +344,13 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return True
         except KonkeApiError:
             _LOGGER.debug("Konke refreshToken flow failed")
+
+        if not allow_password_reauth:
+            _LOGGER.debug(
+                "Konke proactive auth renewal skipped: password login would "
+                "start a new cloud session and log out other clients"
+            )
+            return False
 
         if not allow_password_reauth_from_entry(self.config_entry):
             _LOGGER.debug(
@@ -340,8 +388,17 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         poll_started_at = utcnow_iso()
         request_access_token = self.client.access_token
         try:
-            if not self.client.access_token or self._token_expires_soon():
+            # A missing token means the entry has no session yet: a full login
+            # is the only way to start one. A token that merely expires soon
+            # must not trigger a password login, because that would start a
+            # second cloud session and log the phone app out.
+            if not self.client.access_token:
                 await self.async_refresh_auth(failed_access_token=request_access_token)
+            elif self._should_try_proactive_refresh():
+                await self.async_refresh_auth(
+                    failed_access_token=request_access_token,
+                    allow_password_reauth=False,
+                )
             request_access_token = self.client.access_token
             data = await self.client.fetch_data(
                 configured_home_id=self.config_entry.data.get(CONF_HOME_ID),
@@ -376,8 +433,39 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         metadata.setdefault("started_at", fallback_started_at)
         metadata.setdefault("completed_at", utcnow_iso())
         await self.forensics.async_record_poll(data, metadata, success=True)
+        self._async_maybe_prune_registry(data)
         if self.forensics.enabled:
             await self._async_update_scene_snapshot(data)
+
+    def _async_maybe_prune_registry(self, data: dict[str, Any]) -> None:
+        """Prune registry entries for devices removed from the cloud (daily).
+
+        The registry helpers are imported lazily because the registry module
+        imports the coordinator for type annotations.
+        """
+        if not data.get("normalized_devices_by_id"):
+            return
+        if (data.get("forensic_poll_metadata") or {}).get("failed_area_ids"):
+            return
+        now = datetime.now(UTC)
+        if (
+            self._last_registry_prune_at is not None
+            and now - self._last_registry_prune_at < _REGISTRY_PRUNE_INTERVAL
+        ):
+            return
+        self._last_registry_prune_at = now
+        from .registry import async_prune_konke_registry  # noqa: PLC0415
+
+        removed_entities, removed_devices = async_prune_konke_registry(
+            self.hass, self.config_entry, data
+        )
+        if removed_entities or removed_devices:
+            _LOGGER.info(
+                "Konke removed %s stale scene entities and %s stale devices "
+                "that are no longer reported by the cloud",
+                removed_entities,
+                removed_devices,
+            )
 
     async def _async_record_failed_poll(
         self, started_at: str, error: Exception

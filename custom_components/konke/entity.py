@@ -6,12 +6,17 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_HOME_ID
 from .coordinator import KonkeDataUpdateCoordinator
 from .models import KonkeDevice
-from .registry import home_device_info, konke_device_info
+from .registry import (
+    home_device_info,
+    konke_device_info,
+    parent_device_registry_id,
+)
 
 
 class KonkeEntity(CoordinatorEntity[KonkeDataUpdateCoordinator]):
@@ -78,9 +83,12 @@ class KonkeDeviceEntity(KonkeEntity):
         device = self.konke_device
         if device is None:
             return super().device_info
+        devices_by_id = self.coordinator.data.get("normalized_devices_by_id", {})
         return konke_device_info(
             device,
-            devices_by_id=self.coordinator.data.get("normalized_devices_by_id", {}),
+            via_device_id=parent_device_registry_id(
+                dr.async_get(self.hass), device, devices_by_id
+            ),
         )
 
     async def async_control_device(

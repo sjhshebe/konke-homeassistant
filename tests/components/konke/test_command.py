@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from custom_components.konke.command import (
     ACTION_SET_MODE,
     ACTION_SET_TEMPERATURE,

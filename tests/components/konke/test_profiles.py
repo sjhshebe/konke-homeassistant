@@ -18,7 +18,7 @@ def test_profiles_recognize_verified_fixture_devices() -> None:
         KonkeCapability.AIR_FRESHER,
     ]
 
-    for raw, capability in zip(load_devices(), expected):
+    for raw, capability in zip(load_devices(), expected, strict=True):
         device_type = raw.get("device", {}).get("deviceType", {})
         capabilities = capabilities_from_profile(
             cate_type=raw.get("device", {}).get("cateType") or device_type.get("cateType"),

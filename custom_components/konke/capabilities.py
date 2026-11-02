@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class KonkeCapability(str, Enum):
+class KonkeCapability(StrEnum):
     """Normalized capabilities exposed by Konke devices."""
 
     AIR_CONDITIONER = "air_conditioner"
