@@ -50,7 +50,7 @@
       },
       "reconfigure_confirm": {
         "title": "填写新的控客账号",
-        "description": "填写新账号的凭据。如果账号或家庭发生变化，实体会按新账号的设备重新生成；仅修改同一账号的密码时会保留现有实体。",
+        "description": "填写新账号的凭据；如果账号可以看到多个家庭，下一步会让你选择要使用的家庭。如果账号或家庭发生变化，实体会按新账号的设备重新生成；仅修改同一账号的密码时会保留现有实体。",
         "data": {
           "access_token": "Access Token",
           "refresh_token": "Refresh Token",
@@ -59,12 +59,20 @@
           "country_code": "国家/地区代码",
           "region_id": "区域 ID"
         }
+      },
+      "home": {
+        "title": "选择控客家庭",
+        "description": "该账号可以看到多个控客家庭。选择要接入 Home Assistant 的家庭；如果自己的家是空的，可以选共享的家庭。",
+        "data": {
+          "home_id": "家庭"
+        }
       }
     },
     "error": {
       "cannot_connect": "无法连接控客云端。",
       "invalid_auth": "认证失败，请检查账号、密码或 token。",
-      "unknown": "未知错误。"
+      "unknown": "未知错误。",
+      "account_not_found": "该控客账号不存在，请先在控客 App 中完成注册/接受邀请。"
     },
     "abort": {
       "already_configured": "该控客家庭已经配置。",

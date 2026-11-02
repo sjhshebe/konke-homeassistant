@@ -50,7 +50,7 @@
       },
       "reconfigure_confirm": {
         "title": "Enter the new Konke account",
-        "description": "Enter the credentials of the new account. When the account or home changes, entities are re-created for the new account; changing only the password of the same account keeps the existing entities.",
+        "description": "Enter the credentials of the new account. If the account can see several homes, the next step lets you choose which home to use. When the account or home changes, entities are re-created for the new account; changing only the password of the same account keeps the existing entities.",
         "data": {
           "access_token": "Access Token",
           "refresh_token": "Refresh Token",
@@ -59,12 +59,20 @@
           "country_code": "Country code",
           "region_id": "Region ID"
         }
+      },
+      "home": {
+        "title": "Choose a Konke home",
+        "description": "This account can see several Konke homes. Choose the home to use; pick the shared family home when your own home is empty.",
+        "data": {
+          "home_id": "Home"
+        }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to Konke cloud.",
       "invalid_auth": "Authentication failed. Check your account, password, or token.",
-      "unknown": "Unexpected error."
+      "unknown": "Unexpected error.",
+      "account_not_found": "This Konke account does not exist yet. Register it or accept the invitation in the Konke app first."
     },
     "abort": {
       "already_configured": "This Konke home is already configured.",

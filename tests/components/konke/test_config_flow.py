@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from custom_components.konke.config_flow import _select_home
+from custom_components.konke.config_flow import _home_options, _recommended_home_id
 from custom_components.konke.const import (
     AUTH_METHOD_TOKEN,
     CONF_ACCESS_TOKEN,
@@ -426,12 +426,11 @@ async def test_reconfigure_can_switch_from_token_to_password(hass) -> None:
 
 
 class _FakeHomeClient:
-    """Minimal client for home selection tests."""
+    """Minimal client for home selection helper tests."""
 
     def __init__(self, index: dict, totals: dict) -> None:
         self._index = index
         self._totals = totals
-        self.device_total_calls: list[str] = []
 
     async def fetch_home_index(self, *, home_id: str = "0") -> dict:
         return self._index.get(str(home_id), self._index["0"])
@@ -440,7 +439,6 @@ class _FakeHomeClient:
         return payload["data"]["home"]
 
     async def fetch_device_total(self, *, home_id: str) -> int:
-        self.device_total_calls.append(str(home_id))
         return self._totals.get(str(home_id), 0)
 
 
@@ -458,39 +456,163 @@ def _multi_home_index() -> dict:
         },
         "214716": {
             "data": {
-                "home": {"homeId": 214716, "homeName": "我的家", "areaList": [1]}
+                "home": {"homeId": 214716, "homeName": "共享的家", "areaList": [1]}
             }
         },
     }
 
 
 @pytest.mark.asyncio
-async def test_select_home_prefers_default_home_with_devices() -> None:
-    """The account's default home wins when it contains devices."""
-    client = _FakeHomeClient(_multi_home_index(), {"255027": 5, "214716": 35})
-
-    home = await _select_home(client)
-
-    assert home["homeId"] == 255027
-    assert client.device_total_calls == ["255027"]
-
-
-@pytest.mark.asyncio
-async def test_select_home_falls_back_to_home_with_devices() -> None:
-    """An empty default home falls back to the shared home with devices."""
+async def test_home_options_report_device_counts_default_home_first() -> None:
+    """Home options keep the default home first and report device counts."""
     client = _FakeHomeClient(_multi_home_index(), {"255027": 0, "214716": 35})
 
-    home = await _select_home(client)
+    options = await _home_options(client, _multi_home_index()["0"])
 
-    assert home["homeId"] == 214716
+    assert [item["home_id"] for item in options] == ["255027", "214716"]
+    assert [item["devices"] for item in options] == [0, 35]
+
+
+def test_recommended_home_prefers_default_home_with_devices() -> None:
+    """The account default home wins when it contains devices."""
+    options = [
+        {"home_id": "255027", "name": "我的家", "devices": 5},
+        {"home_id": "214716", "name": "共享的家", "devices": 35},
+    ]
+
+    assert _recommended_home_id(options) == "255027"
+
+
+def test_recommended_home_falls_back_to_home_with_devices() -> None:
+    """An empty default home falls back to the shared home with devices."""
+    options = [
+        {"home_id": "255027", "name": "我的家", "devices": 0},
+        {"home_id": "214716", "name": "共享的家", "devices": 35},
+    ]
+
+    assert _recommended_home_id(options) == "214716"
+
+
+def test_recommended_home_keeps_preferred_home() -> None:
+    """Reauthentication and account switching keep the configured home."""
+    options = [
+        {"home_id": "255027", "name": "我的家", "devices": 5},
+        {"home_id": "214716", "name": "共享的家", "devices": 35},
+    ]
+
+    assert _recommended_home_id(options, preferred_home_id="214716") == "214716"
 
 
 @pytest.mark.asyncio
-async def test_select_home_keeps_preferred_home() -> None:
-    """Reauthentication and account switching keep the configured home."""
-    client = _FakeHomeClient(_multi_home_index(), {"255027": 5, "214716": 35})
+async def test_user_flow_asks_for_home_when_account_has_several(hass) -> None:
+    """A multi-home account gets a home selection step before entry creation."""
+    first = {
+        CONF_USERNAME: "13800138000",
+        CONF_PASSWORD: "pw",
+        CONF_ACCESS_TOKEN: "token-1",
+        CONF_REFRESH_TOKEN: "refresh-1",
+        CONF_COUNTRY_CODE: "86",
+        CONF_REGION_ID: "CN",
+        CONF_HOME_ID: "255027",
+        CONF_HOME_NAME: "我的家",
+        CONF_USER_ID: "user-1",
+        CONF_VERSION_HEADER: "custom-version",
+        "_home_options": [
+            {"home_id": "255027", "name": "我的家", "devices": 0},
+            {"home_id": "214716", "name": "共享的家", "devices": 35},
+        ],
+        "_default_home_id": "214716",
+    }
+    second = {
+        **{k: v for k, v in first.items() if not k.startswith("_")},
+        CONF_HOME_ID: "214716",
+        CONF_HOME_NAME: "共享的家",
+    }
+    validate = AsyncMock(side_effect=[first, second])
+    with patch("custom_components.konke.config_flow._validate_password", validate):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}
+        )
+        assert result["step_id"] == "user"
 
-    home = await _select_home(client, preferred_home_id="214716")
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_AUTH_METHOD: "password"}
+        )
+        assert result["step_id"] == "password"
 
-    assert home["homeId"] == 214716
-    assert client.device_total_calls == []
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_USERNAME: "13800138000", CONF_PASSWORD: "pw"},
+        )
+        assert result["step_id"] == "home"
+        assert result["data_schema"]({})[CONF_HOME_ID] == "214716"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOME_ID: "214716"}
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_HOME_ID] == "214716"
+    assert validate.await_args.kwargs["home_id_override"] == "214716"
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_can_choose_a_different_home(hass) -> None:
+    """Reconfigure lets a multi-home account pick another home."""
+    entry = _password_entry()
+    entry.add_to_hass(hass)
+    first = {
+        CONF_USERNAME: "19981457152",
+        CONF_PASSWORD: "pw",
+        CONF_ACCESS_TOKEN: "token-2",
+        CONF_REFRESH_TOKEN: "refresh-2",
+        CONF_COUNTRY_CODE: "86",
+        CONF_REGION_ID: "CN",
+        CONF_HOME_ID: "home-1",
+        CONF_HOME_NAME: "我的家",
+        CONF_USER_ID: "user-1",
+        CONF_VERSION_HEADER: "custom-version",
+        "_home_options": [
+            {"home_id": "home-1", "name": "我的家", "devices": 0},
+            {"home_id": "home-2", "name": "共享的家", "devices": 35},
+        ],
+        "_default_home_id": "home-1",
+    }
+    second = {
+        **{k: v for k, v in first.items() if not k.startswith("_")},
+        CONF_HOME_ID: "home-2",
+        CONF_HOME_NAME: "共享的家",
+    }
+    validate = AsyncMock(side_effect=[first, second])
+    with (
+        patch("custom_components.konke.config_flow._validate_password", validate),
+        patch(
+            "custom_components.konke.config_flow.reset_konke_registry"
+        ) as reset_registry,
+        patch(
+            "homeassistant.config_entries.ConfigEntries.async_reload",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_RECONFIGURE, "entry_id": entry.entry_id},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_AUTH_METHOD: "password"}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_USERNAME: "19981457152", CONF_PASSWORD: "pw"},
+        )
+        assert result["step_id"] == "home"
+        assert result["data_schema"]({})[CONF_HOME_ID] == "home-1"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_HOME_ID: "home-2"}
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    reset_registry.assert_called_once()
+    assert entry.data[CONF_HOME_ID] == "home-2"
