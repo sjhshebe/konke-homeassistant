@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from custom_components.konke.config_flow import _select_home
 from custom_components.konke.const import (
     AUTH_METHOD_TOKEN,
     CONF_ACCESS_TOKEN,
@@ -86,6 +87,7 @@ async def test_token_reauth_preserves_profile_and_refresh_token(hass) -> None:
         "old-refresh",
         "+99",
         "custom-region",
+        preferred_home_id="home-1",
     )
     assert entry.data[CONF_ACCESS_TOKEN] == "new-access"
     assert entry.data[CONF_REFRESH_TOKEN] == "old-refresh"
@@ -421,3 +423,74 @@ async def test_reconfigure_can_switch_from_token_to_password(hass) -> None:
     assert entry.data[CONF_AUTH_METHOD] == "password"
     assert entry.data[CONF_USERNAME] == "13800138000"
     assert entry.data[CONF_PASSWORD] == "new-password"
+
+
+class _FakeHomeClient:
+    """Minimal client for home selection tests."""
+
+    def __init__(self, index: dict, totals: dict) -> None:
+        self._index = index
+        self._totals = totals
+        self.device_total_calls: list[str] = []
+
+    async def fetch_home_index(self, *, home_id: str = "0") -> dict:
+        return self._index.get(str(home_id), self._index["0"])
+
+    def extract_home(self, payload: dict) -> dict:
+        return payload["data"]["home"]
+
+    async def fetch_device_total(self, *, home_id: str) -> int:
+        self.device_total_calls.append(str(home_id))
+        return self._totals.get(str(home_id), 0)
+
+
+def _multi_home_index() -> dict:
+    """Return a home index for an account with an own and a shared home."""
+    return {
+        "0": {
+            "data": {
+                "home": {"homeId": 255027, "homeName": "我的家", "areaList": [1]},
+                "homeList": [{"homeId": 255027}, {"homeId": 214716}],
+            }
+        },
+        "255027": {
+            "data": {"home": {"homeId": 255027, "homeName": "我的家", "areaList": [1]}}
+        },
+        "214716": {
+            "data": {
+                "home": {"homeId": 214716, "homeName": "我的家", "areaList": [1]}
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_select_home_prefers_default_home_with_devices() -> None:
+    """The account's default home wins when it contains devices."""
+    client = _FakeHomeClient(_multi_home_index(), {"255027": 5, "214716": 35})
+
+    home = await _select_home(client)
+
+    assert home["homeId"] == 255027
+    assert client.device_total_calls == ["255027"]
+
+
+@pytest.mark.asyncio
+async def test_select_home_falls_back_to_home_with_devices() -> None:
+    """An empty default home falls back to the shared home with devices."""
+    client = _FakeHomeClient(_multi_home_index(), {"255027": 0, "214716": 35})
+
+    home = await _select_home(client)
+
+    assert home["homeId"] == 214716
+
+
+@pytest.mark.asyncio
+async def test_select_home_keeps_preferred_home() -> None:
+    """Reauthentication and account switching keep the configured home."""
+    client = _FakeHomeClient(_multi_home_index(), {"255027": 5, "214716": 35})
+
+    home = await _select_home(client, preferred_home_id="214716")
+
+    assert home["homeId"] == 214716
+    assert client.device_total_calls == []

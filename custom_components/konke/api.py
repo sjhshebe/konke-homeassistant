@@ -493,6 +493,26 @@ class KonkeApiClient:
             params={"synUserHostList": "true"},
         )
 
+    async def fetch_device_total(self, *, home_id: str | int) -> int:
+        """Return the number of visible devices in a home.
+
+        Used when an account can see several homes (for example a family
+        member account that owns an empty home plus the shared family home),
+        so the integration can pick the home that actually contains devices.
+        """
+        payload = await self._request(
+            "GET",
+            "/user/device",
+            home_id=home_id,
+            params={"page": 1, "pageSize": 1},
+        )
+        data = payload.get("data")
+        page = data.get("pagePojo") if isinstance(data, dict) else None
+        try:
+            return int((page or {}).get("dataTotal") or 0)
+        except (TypeError, ValueError):
+            return 0
+
     async def fetch_scenes(
         self,
         *,

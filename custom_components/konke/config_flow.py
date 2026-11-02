@@ -47,12 +47,91 @@ from .profile import (
 from .registry import reset_konke_registry
 
 
+async def _select_home(
+    client: KonkeApiClient,
+    *,
+    preferred_home_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the home to configure for this account.
+
+    An account can see several homes. Selection order:
+
+    1. the previously configured home when it is still visible (reauthentication
+       and account switching keep pointing at the same home);
+    2. the account's default home (what the mobile app opens) when it contains
+       devices;
+    3. otherwise the home that actually contains devices, for example the
+       shared family home when the account's own default home is empty.
+    """
+    home_index = await client.fetch_home_index(home_id="0")
+    data = home_index.get("data")
+    data = data if isinstance(data, dict) else {}
+    current_home = data.get("home")
+    current_home = current_home if isinstance(current_home, dict) else {}
+    default_home_id = (
+        str(current_home["homeId"]) if current_home.get("homeId") is not None else None
+    )
+
+    candidates: list[str] = []
+    if default_home_id is not None:
+        candidates.append(default_home_id)
+    for item in data.get("homeList") or []:
+        if not isinstance(item, dict) or item.get("homeId") is None:
+            continue
+        home_id = str(item["homeId"])
+        if home_id not in candidates:
+            candidates.append(home_id)
+    if not candidates:
+        raise KonkeApiError("No home found in Konke account")
+
+    async def _device_total(home_id: str) -> int:
+        try:
+            return await client.fetch_device_total(home_id=home_id)
+        except KonkeApiError:
+            return 0
+
+    preferred = str(preferred_home_id) if preferred_home_id else None
+    chosen: str | None = None
+    if preferred and preferred in candidates:
+        chosen = preferred
+    elif len(candidates) == 1:
+        chosen = candidates[0]
+    else:
+        default_total = (
+            await _device_total(default_home_id) if default_home_id else 0
+        )
+        if default_home_id and default_total > 0:
+            chosen = default_home_id
+        else:
+            best_total = 0
+            for candidate in candidates:
+                total = await _device_total(candidate)
+                if total > best_total:
+                    chosen = candidate
+                    best_total = total
+            if chosen is None:
+                chosen = candidates[0]
+
+    if current_home and str(current_home.get("homeId")) == chosen:
+        return current_home
+    chosen_index = await client.fetch_home_index(home_id=chosen)
+    home = client.extract_home(chosen_index)
+    if str(home.get("homeId")) == chosen:
+        return home
+    for item in chosen_index.get("data", {}).get("homeList", []) or []:
+        if isinstance(item, dict) and str(item.get("homeId")) == chosen:
+            return item
+    raise KonkeApiError("Selected home is not accessible")
+
+
 async def _validate_token(
     hass: HomeAssistant,
     token: str,
     refresh_token: str,
     country_code: str,
     region_id: str,
+    *,
+    preferred_home_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate access token and return config data."""
     client = KonkeApiClient(
@@ -61,8 +140,9 @@ async def _validate_token(
         country_code=country_code,
         region_id=region_id,
     )
-    home_index = await client.validate_token()
-    home = client.extract_home(home_index)
+    await client.validate_token()
+    home = await _select_home(client, preferred_home_id=preferred_home_id)
+    home_index = await client.fetch_home_index(home_id=home["homeId"])
     user_id = home_index.get("data", {}).get("user", {}).get("userId")
     return {
         CONF_ACCESS_TOKEN: token,
@@ -82,6 +162,8 @@ async def _validate_password(
     password: str,
     country_code: str,
     region_id: str,
+    *,
+    preferred_home_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate username/password and return config data."""
     client = KonkeApiClient(
@@ -95,8 +177,9 @@ async def _validate_password(
         country_code=country_code,
         region_id=region_id,
     )
-    home_index = await client.validate_token()
-    home = client.extract_home(home_index)
+    await client.validate_token()
+    home = await _select_home(client, preferred_home_id=preferred_home_id)
+    home_index = await client.fetch_home_index(home_id=home["homeId"])
     user_token = login_payload.get("data", {}).get("userToken", {})
     user_id = user_token.get("userId") or home_index.get("data", {}).get(
         "user", {}
@@ -379,6 +462,7 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         ).strip(),
                         country_code,
                         region_id,
+                        preferred_home_id=existing_data.get(CONF_HOME_ID),
                     )
                 else:
                     data = await _validate_password(
@@ -387,6 +471,7 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         user_input[CONF_PASSWORD],
                         country_code,
                         region_id,
+                        preferred_home_id=existing_data.get(CONF_HOME_ID),
                     )
             except KonkeAuthError:
                 errors["base"] = "invalid_auth"
@@ -481,6 +566,7 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         str(user_input.get(CONF_REFRESH_TOKEN, "")).strip(),
                         country_code,
                         region_id,
+                        preferred_home_id=entry.data.get(CONF_HOME_ID),
                     )
                 else:
                     data = await _validate_password(
@@ -489,6 +575,7 @@ class KonkeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         user_input[CONF_PASSWORD],
                         country_code,
                         region_id,
+                        preferred_home_id=entry.data.get(CONF_HOME_ID),
                     )
             except KonkeAuthError:
                 errors["base"] = "invalid_auth"
