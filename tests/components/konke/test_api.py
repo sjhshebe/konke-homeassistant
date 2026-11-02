@@ -285,3 +285,53 @@ async def test_fetch_data_marks_partial_area_and_scene_failures() -> None:
     assert cache_request["started_at"] == "2026-08-11T00:00:02+00:00"
     assert metadata["scene_requests"][0]["success"] is False
     assert metadata["scene_requests"][0]["http_status"] == 503
+
+
+@pytest.mark.asyncio
+async def test_fetch_data_uses_configured_home_when_it_is_not_the_default() -> None:
+    """The configured home drives areas/devices even when it is not the default."""
+    client = KonkeApiClient(object(), access_token="test-token")
+    default_index = {
+        "data": {
+            "home": {
+                "homeId": "255027",
+                "homeName": "自己的家",
+                "areaList": [{"areaId": "own-area", "roomList": []}],
+            }
+        }
+    }
+    shared_index = {
+        "data": {
+            "home": {
+                "homeId": "214716",
+                "homeName": "共享的家",
+                "areaList": [
+                    {
+                        "areaId": "shared-area",
+                        "roomList": [
+                            {"roomId": "room-1", "roomName": "客厅"}
+                        ],
+                    }
+                ],
+            }
+        }
+    }
+
+    async def fetch_home_index(*, home_id: str = "0") -> dict:
+        return default_index if str(home_id) == "0" else shared_index
+
+    client.fetch_home_index = AsyncMock(side_effect=fetch_home_index)
+    client.fetch_scenes_exchange = AsyncMock(return_value=([], {}))
+    client.fetch_devices_exchange = AsyncMock(
+        return_value=([{"userDeviceId": "device-1"}], {"coverage_complete": True})
+    )
+    client.fetch_device_cache_exchange = AsyncMock(return_value=([], {}))
+
+    data = await client.fetch_data(configured_home_id="214716")
+
+    assert data["home"]["homeId"] == "214716"
+    assert [room["roomName"] for room in data["rooms"]] == ["客厅"]
+    client.fetch_devices_exchange.assert_awaited_with(
+        home_id="214716",
+        area_id="shared-area",
+    )

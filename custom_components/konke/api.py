@@ -513,6 +513,23 @@ class KonkeApiClient:
         except (TypeError, ValueError):
             return 0
 
+    async def async_fetch_configured_home(self, home_id: str) -> dict[str, Any]:
+        """Return the home object for an explicitly configured home id.
+
+        Family member accounts can see several homes while the cloud reports a
+        different default home. Device/area data must come from the configured
+        home instead of the account default, otherwise the integration polls an
+        empty home.
+        """
+        home_index = await self.fetch_home_index(home_id=home_id)
+        home = self.extract_home(home_index)
+        if str(home.get("homeId")) == home_id:
+            return home
+        for item in home_index.get("data", {}).get("homeList", []) or []:
+            if isinstance(item, dict) and str(item.get("homeId")) == home_id:
+                return item
+        return home
+
     async def fetch_scenes(
         self,
         *,
@@ -894,6 +911,8 @@ class KonkeApiClient:
         home_index = await self.fetch_home_index(home_id="0")
         home = self.extract_home(home_index)
         home_id = str(configured_home_id or home["homeId"])
+        if configured_home_id and str(home.get("homeId")) != home_id:
+            home = await self.async_fetch_configured_home(home_id)
         rooms = self.extract_rooms(home)
 
         scenes_by_id: dict[str, dict[str, Any]] = {}
