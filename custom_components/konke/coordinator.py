@@ -51,6 +51,8 @@ _LISTENER_BACKOFF_SECONDS = (1, 2, 5, 10, 30, 60, 300)
 _SCENE_DETAIL_REFRESH = timedelta(days=1)
 _PROACTIVE_REFRESH_INTERVAL = timedelta(hours=1)
 _REGISTRY_PRUNE_INTERVAL = timedelta(hours=24)
+_REALTIME_REFRESH_DELAY = 1.5
+_COMMAND_REFRESH_DELAYS = (2.0, 10.0, 30.0, 60.0, 120.0)
 _DEVICE_REPORT_PAYLOAD_BYTES = 48 * 1024
 _UNKNOWN_WEBSOCKET_SAMPLE_BYTES = 4 * 1024
 _WEBSOCKET_AUTH_CLOSE_CODES = {4001, 4003, 4401, 4403}
@@ -100,6 +102,9 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._scene_details_refreshed_at: datetime | None = None
         self._proactive_refresh_attempted_at: datetime | None = None
         self._last_registry_prune_at: datetime | None = None
+        self._realtime_refresh_task: asyncio.Task[None] | None = None
+        self._command_refresh_task: asyncio.Task[None] | None = None
+        self._command_refresh_pending = False
 
     async def async_initialize(self) -> None:
         """Load persisted evidence before the first cloud refresh."""
@@ -204,6 +209,14 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         await self.forensics.async_mark_runtime_stopped()
             finally:
+                for refresh_task, description in (
+                    (self._realtime_refresh_task, "Konke realtime refresh task"),
+                    (self._command_refresh_task, "Konke command refresh task"),
+                ):
+                    if refresh_task is not None:
+                        await self._async_cancel_task(refresh_task, description)
+                self._realtime_refresh_task = None
+                self._command_refresh_task = None
                 await self.forensics.async_shutdown()
 
     def _update_entry_tokens(
@@ -713,6 +726,7 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             attempts,
             started,
         )
+        self._schedule_command_refreshes()
         return exchange.payload
 
     async def async_execute_scene(
@@ -1021,6 +1035,8 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data,
                 recorded_at=received_at,
             )
+            if is_device_report:
+                self._schedule_realtime_refresh()
             return
         if message.type == WEBSOCKET_MESSAGE_BINARY:
             payload = bytes(message.data)
@@ -1036,6 +1052,74 @@ class KonkeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         if message.type == WEBSOCKET_MESSAGE_ERROR:
             raise KonkeApiError("WebSocket transport error")
+
+
+    def _schedule_realtime_refresh(self) -> None:
+        """Refresh soon after a cloud device report so HA follows real time.
+
+        The Konke cloud pushes device reports over the already connected
+        WebSocket. Refreshing shortly after a report makes external changes
+        (app, wall panels, cloud automations) show up in Home Assistant within
+        seconds instead of waiting for the next five/ten minute poll.
+        """
+        if self._shutdown_complete or self._listener_stop.is_set():
+            return
+        if self._realtime_refresh_task is not None:
+            return
+        self._realtime_refresh_task = self.hass.async_create_task(
+            self._async_realtime_refresh(),
+            "konke realtime refresh",
+        )
+
+    async def _async_realtime_refresh(self) -> None:
+        """Coalesced refresh triggered by a cloud device report."""
+        try:
+            await asyncio.sleep(_REALTIME_REFRESH_DELAY)
+            if self._shutdown_complete:
+                return
+            await self.async_refresh()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - refresh retries on the next poll
+            _LOGGER.debug(
+                "Konke realtime refresh failed: %s", self._safe_error_summary(err)
+            )
+        finally:
+            self._realtime_refresh_task = None
+
+    def _schedule_command_refreshes(self) -> None:
+        """Poll a few times after a command to catch delayed cloud state.
+
+        Some devices (for example multi-in-one indoor units) acknowledge a
+        command immediately but only report the new state a few minutes later.
+        A short follow-up refresh sequence keeps the entity state close to the
+        app without waiting for the next scheduled poll.
+        """
+        if self._shutdown_complete or self._command_refresh_pending:
+            return
+        self._command_refresh_pending = True
+        self._command_refresh_task = self.hass.async_create_task(
+            self._async_command_refresh_sequence(),
+            "konke command refresh",
+        )
+
+    async def _async_command_refresh_sequence(self) -> None:
+        """Refresh after a command with increasing delays."""
+        try:
+            for delay in _COMMAND_REFRESH_DELAYS:
+                await asyncio.sleep(delay)
+                if self._shutdown_complete:
+                    return
+                await self.async_refresh()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # noqa: BLE001 - a later poll will retry
+            _LOGGER.debug(
+                "Konke command refresh failed: %s", self._safe_error_summary(err)
+            )
+        finally:
+            self._command_refresh_pending = False
+            self._command_refresh_task = None
 
 
 def _next_listener_retry(

@@ -351,3 +351,66 @@ def test_stable_connection_resets_listener_backoff() -> None:
     with patch("custom_components.konke.coordinator.random.uniform", return_value=1.0):
         assert _next_listener_retry(4, 59) == (5, 30)
         assert _next_listener_retry(4, 60) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_device_report_schedules_a_realtime_refresh(hass) -> None:
+    """Device reports make HA refresh soon instead of waiting for the poll."""
+    client = SimpleNamespace(access_token="access-secret", refresh_token="refresh-secret")
+    coordinator = _coordinator(hass, client)
+    report = {"messageType": "DeviceReport", "data": {"userDeviceId": "device-1"}}
+
+    with patch.object(coordinator, "_schedule_realtime_refresh") as schedule:
+        await coordinator._async_record_websocket_message(
+            SimpleNamespace(type=WEBSOCKET_MESSAGE_TEXT, data=json.dumps(report))
+        )
+    schedule.assert_called_once()
+
+    with patch.object(coordinator, "_schedule_realtime_refresh") as schedule:
+        await coordinator._async_record_websocket_message(
+            SimpleNamespace(
+                type=WEBSOCKET_MESSAGE_TEXT,
+                data=json.dumps({"event": "other", "data": {"x": 1}}),
+            )
+        )
+    schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refresh_schedulers_coalesce_repeated_requests(hass) -> None:
+    """Repeated reports/commands share one pending refresh task."""
+    client = SimpleNamespace(access_token="access-secret", refresh_token="refresh-secret")
+    coordinator = _coordinator(hass, client)
+
+    coordinator._schedule_realtime_refresh()
+    realtime_task = coordinator._realtime_refresh_task
+    coordinator._schedule_realtime_refresh()
+    assert coordinator._realtime_refresh_task is realtime_task
+
+    coordinator._schedule_command_refreshes()
+    command_task = coordinator._command_refresh_task
+    coordinator._schedule_command_refreshes()
+    assert coordinator._command_refresh_task is command_task
+
+    for task in (realtime_task, command_task):
+        if task is not None:
+            task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_device_command_schedules_follow_up_refreshes(hass) -> None:
+    """A device command schedules the delayed refresh sequence."""
+    client = SimpleNamespace(access_token="access-secret", refresh_token="refresh-secret")
+    coordinator = _coordinator(hass, client)
+    coordinator._async_control_exchange = AsyncMock(
+        return_value=SimpleNamespace(payload={"code": 200}, metadata={"http_status": 200})
+    )
+
+    with patch.object(coordinator, "_schedule_command_refreshes") as schedule:
+        await coordinator.async_control_device(
+            home_id="home-1",
+            user_device_id=11969672,
+            action_name="TurnOff",
+        )
+
+    schedule.assert_called_once()
